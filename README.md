@@ -1,0 +1,2 @@
+# ImpactModalAnalysis
+ImpactModalAnalyzer is a Python-based tool for impact modal analysis of structures and materials. The software records an acoustic response after an impact excitation, identifies dominant resonance frequencies, estimates damping characteristics (logarithmic decrement, damping coefficient, quality factor), analyzes modal relationships, and automatically stores measurement results for further statistical processing and uncertainty evaluation.
