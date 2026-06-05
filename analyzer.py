@@ -25,42 +25,30 @@ XLSX_FILE = os.path.join(OUTPUT_DIR, "results.xlsx")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+HEADERS = [
+    "measurement",
+    "f1", "f2", "f3", "f4", "f5",
+    "delta",
+    "alpha",
+    "q",
+    "rms",
+    "energy",
+    "area",
+    "f2_f1",
+    "f3_f1",
+    "band_energy_ratio"
+]
+
 if not os.path.exists(CSV_FILE):
     with open(CSV_FILE, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow([
-            "measurement",
-            "f1", "f2", "f3", "f4", "f5",
-            "delta",
-            "alpha",
-            "q",
-            "rms",
-            "energy",
-            "area",
-            "f2_f1",
-            "f3_f1",
-            "band_energy_ratio"
-        ])
+        writer.writerow(HEADERS)
 
 if not os.path.exists(XLSX_FILE):
     wb = Workbook()
     ws = wb.active
     ws.title = "results"
-
-    ws.append([
-        "measurement",
-        "f1", "f2", "f3", "f4", "f5",
-        "delta",
-        "alpha",
-        "q",
-        "rms",
-        "energy",
-        "area",
-        "f2_f1",
-        "f3_f1",
-        "band_energy_ratio"
-    ])
-
+    ws.append(HEADERS)
     wb.save(XLSX_FILE)
 
 
@@ -80,11 +68,11 @@ def record_signal():
 
 
 def save_wav(signal):
-    files = len(os.listdir(OUTPUT_DIR))
+    files = [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".wav")]
 
     filename = os.path.join(
         OUTPUT_DIR,
-        f"measurement_{files+1:03d}.wav"
+        f"measurement_{len(files) + 1:03d}.wav"
     )
 
     sf.write(filename, signal, FS)
@@ -104,7 +92,7 @@ def extract_impact_region(signal):
 
     segment = signal[start:end]
 
-    # если вдруг меньше 4096 отсчетов — дополняем нулями
+    # если вдруг меньше 2048 отсчетов — дополняем нулями
     if len(segment) < 2048:
         segment = np.pad(segment, (0, 2048 - len(segment)))
 
@@ -112,7 +100,6 @@ def extract_impact_region(signal):
 
 
 def analyze_fft(signal):
-
     N = len(signal)
 
     signal = signal - np.mean(signal)
@@ -139,8 +126,6 @@ def analyze_fft(signal):
 
     return freqs, spectrum, peak_freqs[:10], peak_amps[:10]
 
-
-# --- Дополнительные функции ---
 
 def bandpass_filter(signal, lowcut, highcut, fs, order=4):
     nyquist = 0.5 * fs
@@ -215,23 +200,53 @@ def calculate_alpha(envelope):
         return np.nan, np.nan
 
 
-def calculate_log_decrement(envelope):
+def calculate_log_decrement(signal, f0):
+    """
+    Логарифмический декремент считается по двум соседним максимумам
+    самого выделенного колебания, а не по огибающей.
+
+    Формула:
+        delta = ln(A1 / A2)
+
+    где A1 и A2 — амплитуды двух соседних пиков одной полярности.
+    """
+
+    if len(signal) == 0 or f0 <= 0:
+        return np.nan
+
+    signal = np.nan_to_num(signal)
+    signal = signal - np.mean(signal)
+
+    first_peak_idx = np.argmax(np.abs(signal))
+    first_peak_sign = np.sign(signal[first_peak_idx])
+
+    if first_peak_sign == 0:
+        return np.nan
+
+    # Разворачиваем сигнал так, чтобы первый главный пик был положительным
+    signal = signal * first_peak_sign
+
+    period_samples = int(FS / f0)
+
+    if period_samples <= 1:
+        return np.nan
+
     peaks, _ = find_peaks(
-        envelope,
-        height=np.max(envelope) * 0.1,
-        distance=max(20, int(FS / 500))
+        signal,
+        height=np.max(signal) * 0.1,
+        distance=max(1, int(period_samples * 0.8))
     )
 
     if len(peaks) < 2:
         return np.nan
 
-    amps = envelope[peaks]
-    amps = amps[amps > 0]
+    A1 = signal[peaks[0]]
+    A2 = signal[peaks[1]]
 
-    if len(amps) < 2:
+    if A1 <= 0 or A2 <= 0:
         return np.nan
 
-    return np.log(amps[0] / amps[-1]) / max(1, len(amps) - 1)
+    return float(np.log(A1 / A2))
 
 
 def calculate_energy(signal):
@@ -297,56 +312,15 @@ def save_results(peak_freqs,
                  ratio_31,
                  band_ratio):
 
-    measurement_id = len(os.listdir(OUTPUT_DIR))
+    wav_files = [f for f in os.listdir(OUTPUT_DIR) if f.endswith(".wav")]
+    measurement_id = len(wav_files)
 
     freqs = list(peak_freqs[:5])
 
     while len(freqs) < 5:
         freqs.append(np.nan)
 
-    with open(CSV_FILE, "a", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow([
-            measurement_id,
-            freqs[0],
-            freqs[1],
-            freqs[2],
-            freqs[3],
-            freqs[4],
-            delta,
-            alpha,
-            q,
-            rms,
-            energy,
-            area,
-            ratio_21,
-            ratio_31,
-            band_ratio
-        ])
-
-    # --- SAVE TO EXCEL ---
-    if os.path.exists(XLSX_FILE):
-        wb = load_workbook(XLSX_FILE)
-        ws = wb.active
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "results"
-        ws.append([
-            "measurement",
-            "f1", "f2", "f3", "f4", "f5",
-            "delta",
-            "alpha",
-            "q",
-            "rms",
-            "energy",
-            "area",
-            "f2_f1",
-            "f3_f1",
-            "band_energy_ratio"
-        ])
-
-    ws.append([
+    row = [
         measurement_id,
         freqs[0],
         freqs[1],
@@ -362,7 +336,22 @@ def save_results(peak_freqs,
         ratio_21,
         ratio_31,
         band_ratio
-    ])
+    ]
+
+    with open(CSV_FILE, "a", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(row)
+
+    if os.path.exists(XLSX_FILE):
+        wb = load_workbook(XLSX_FILE)
+        ws = wb.active
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "results"
+        ws.append(HEADERS)
+
+    ws.append(row)
 
     wb.save(XLSX_FILE)
 
@@ -389,14 +378,14 @@ def plot_results(signal,
     for f in peak_freqs[:5]:
         ax[1].axvline(f, linestyle="--")
 
-    ax[1].set_xlim(0, min(FS/2, f0 * 3))
+    ax[1].set_xlim(0, min(FS / 2, f0 * 3))
     ax[1].set_title("FFT")
     ax[1].grid(True)
 
-    ax[2].plot(t_mode, signal_cut, label="Сигнал")
+    ax[2].plot(t_mode, signal_cut, label="Выделенная мода")
     ax[2].plot(t_mode, envelope, linewidth=2, label="Огибающая")
     ax[2].legend()
-    ax[2].set_title("Выделенная мода")
+    ax[2].set_title("Выделенная мода и огибающая")
     ax[2].grid(True)
 
     plt.show()
@@ -404,11 +393,11 @@ def plot_results(signal,
 
 def main():
 
-    signal = record_signal()
+    raw_signal = record_signal()
 
-    save_wav(signal)
+    save_wav(raw_signal)
 
-    signal = extract_impact_region(signal)
+    signal = extract_impact_region(raw_signal)
 
     freqs, spectrum, peak_freqs, peak_amps = analyze_fft(signal)
 
@@ -417,13 +406,13 @@ def main():
     for i, f in enumerate(peak_freqs[:10], start=1):
         print(f"{i}. {f:.2f} Гц")
 
-    if len(peak_freqs) > 0:
-        print(
-            f"\nОсновная частота: "
-            f"{peak_freqs[0]:.2f} Гц"
-        )
+    if len(peak_freqs) == 0:
+        print("Пики не найдены. Измерение не обработано.")
+        return
 
     f0 = peak_freqs[0]
+
+    print(f"\nОсновная частота: {f0:.2f} Гц")
 
     bandwidth = max(50, f0 * 0.3)
 
@@ -452,7 +441,8 @@ def main():
 
     alpha, _ = calculate_alpha(envelope)
 
-    delta = calculate_log_decrement(envelope)
+    # Теперь декремент считается по двум соседним пикам самой моды
+    delta = calculate_log_decrement(signal_filt_cut, f0)
 
     q = calculate_q(delta)
 
@@ -500,6 +490,7 @@ def main():
     )
 
     print(f"\nРезультаты сохранены в: {CSV_FILE}")
+    print(f"Результаты сохранены в: {XLSX_FILE}")
 
     plot_results(
         signal,
